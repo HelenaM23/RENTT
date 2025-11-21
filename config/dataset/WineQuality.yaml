@@ -1,0 +1,21 @@
+name: WineQuality
+task_type: classification
+num_features: 13
+num_output: 3
+model_filename: 8-4_20250721-1114
+scalar_type: minmax
+feature_names:
+  - alcohol
+  - malic_acid
+  - ash
+  - alcalinity_of_ash
+  - magnesium
+  - total_phenols
+  - flavanoids
+  - nonflavanoid_phenols
+  - proanthocyanins
+  - color_intensity
+  - hue
+  - od280/od315_of_diluted_wines
+  - proline
+loss_func: cross entropy

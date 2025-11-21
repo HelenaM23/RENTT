@@ -1,0 +1,8 @@
+name: Diabetes
+task_type: classification
+num_features: 8
+num_output: 2
+model_filename: 8-4_20250721-1053
+scalar_type: minmax
+feature_names: [Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin, BMI, DiabetesPedigreeFunction, Age]
+loss_func: cross entropy

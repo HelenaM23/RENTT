@@ -1,0 +1,8 @@
+name: Diabetes_reg
+task_type: regression
+num_features: 10
+num_output: 1
+model_filename: 8-4_20250721-0601
+scalar_type: minmax
+feature_names: [age, sex, bmi, bp, s1, s2, s3, s4, s5, s6]
+loss_func: mse

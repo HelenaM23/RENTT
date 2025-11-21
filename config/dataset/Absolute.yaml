@@ -1,0 +1,8 @@
+name: Absolute
+task_type: regression
+num_features: 1
+num_output: 1
+model_filename: 8-4_20250611-1311
+scalar_type: minmax
+feature_names: [x1]
+loss_func: mse

@@ -1,0 +1,12 @@
+name: IRIS
+task_type: classification
+num_features: 4
+num_output: 3
+model_filename: 8-4_20250715-0745
+scalar_type: minmax
+feature_names:
+  - sepal_length
+  - sepal_width
+  - petal_length
+  - petal_width
+loss_func: cross entropy

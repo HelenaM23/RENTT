@@ -1,0 +1,8 @@
+name: CarEvaluation
+task_type: classification
+num_features: 6
+num_output: 4
+model_filename: 8-4_20250721-1041
+scalar_type: minmax
+feature_names: [ buying, maint, doors, persons, lug_boot, safety]
+loss_func: cross entropy

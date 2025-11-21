@@ -1,0 +1,8 @@
+name: CaliforniaHousing
+task_type: regression
+num_features: 8
+num_output: 1
+model_filename: 8-4_20250811-1505
+scalar_type: minmax
+feature_names: [MedInc, HouseAge, AveRooms, AveBedrms, Population, AveOccup, Latitude, Longitude]
+loss_func: mse

@@ -1,0 +1,13 @@
+defaults:
+  - _self_
+  - dataset: Iris
+
+framework: tensorflow
+load_nn_model: True
+train_test_split_ratio: 0.8
+hidden_layers:
+  - 8
+  - 4
+use_complete_tree: False
+activation_function: relu
+random_state: 10

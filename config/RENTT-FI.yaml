@@ -1,0 +1,27 @@
+defaults:
+  - _self_
+  - dataset: Iris
+
+train_test_split_ratio: 0.8
+random_state: 10
+framework: tensorflow
+use_complete_tree: False
+activation_function: relu
+num_samples: 100 # null for using all samples
+
+plot_analysis: True
+
+# RENTT-FI specific settings
+compute_local_fe: True
+compute_local_fc: True
+compute_regional_fe: True
+compute_regional_fc: True
+compute_global_fe: True
+compute_global_fc: True
+
+# comparison with SOTA methods
+compute_global_comparison_sota_nn_dt: True
+compute_global_comparison_sota_rentt: True
+
+compute_local_comparison_sota_nn_dt: True
+compute_local_comparison_sota_rentt: True
