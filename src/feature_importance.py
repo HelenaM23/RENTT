@@ -46,7 +46,8 @@ class RENTTFeatureImportance:
         
         def calculate_importance_for_output(tree_model, output_idx=None):
             """Aggregate feature importance across all leaf nodes (global)."""
-            leaf_nodes = [node for node in reversed(tree_model) if node.is_leaf]
+            # Filter: Only leaves with samples
+            leaf_nodes = self._get_non_empty_leaves(tree_model)
             
             if not leaf_nodes:
                 return None, None
@@ -88,13 +89,20 @@ class RENTTFeatureImportance:
         
         # Calculate for single or multiple outputs
         if self.config.dataset.num_output == 1:
-            return calculate_importance_for_output(tree.tree)
+            importances, intercepts = calculate_importance_for_output(tree.tree)
+            return (
+                self._convert_to_serializable(importances),
+                self._convert_to_serializable(intercepts)
+            )
         
         results = [calculate_importance_for_output(tree.tree, i) 
                    for i in range(self.config.dataset.num_output)]
         
         importances, intercepts = zip(*results)
-        return list(importances), list(intercepts)
+        return (
+            self._convert_to_serializable(list(importances)),
+            self._convert_to_serializable(list(intercepts))
+        )
     
     def calculate_global_feature_contribution(self, X_total, tree, y_total, 
                                              local_feature_contribution=None, 
@@ -106,16 +114,21 @@ class RENTTFeatureImportance:
                 self.calculate_local_feature_contribution(X_total, tree, None, None)
         
         if self.config.dataset.task_type == TaskType.CLASSIFICATION:
-            return self._aggregate_by_class(
+            contribution, intercept = self._aggregate_by_class(
                 local_feature_contribution, local_feature_contribution_intercept, y_total
             )
         elif self.config.dataset.task_type == TaskType.REGRESSION:
-            return self._aggregate_values(
+            contribution, intercept = self._aggregate_values(
                 local_feature_contribution, 
                 local_feature_contribution_intercept
             )
         else:
             raise ValueError(f"Unsupported task type: {self.config.dataset.task_type}")
+        
+        return (
+            self._convert_to_serializable(contribution),
+            self._convert_to_serializable(intercept)
+        )
 
     # ==================== Regional Methods ====================
     
@@ -124,7 +137,8 @@ class RENTTFeatureImportance:
         
         def calculate_importance_for_output(tree_model, output_idx=None):
             """Calculate feature importance per leaf node (regional)."""
-            leaf_nodes = [node for node in reversed(tree_model) if node.is_leaf]
+            # Filter: Only leaves with samples
+            leaf_nodes = self._get_non_empty_leaves(tree_model)
             
             if not leaf_nodes:
                 return np.array([]), np.array([])
@@ -142,13 +156,20 @@ class RENTTFeatureImportance:
         
         # Calculate for single or multiple outputs
         if self.config.dataset.num_output == 1:
-            return calculate_importance_for_output(tree.tree)
+            importances, intercepts = calculate_importance_for_output(tree.tree)
+            return (
+                self._convert_to_serializable(importances),
+                self._convert_to_serializable(intercepts)
+            )
         
         results = [calculate_importance_for_output(tree.tree, i) 
                    for i in range(self.config.dataset.num_output)]
         
         importances, intercepts = zip(*results)
-        return list(importances), list(intercepts)
+        return (
+            self._convert_to_serializable(list(importances)),
+            self._convert_to_serializable(list(intercepts))
+        )
     
     def calculate_regional_feature_contribution(self, samples, tree, 
                                                local_feature_contribution=None, 
@@ -159,15 +180,18 @@ class RENTTFeatureImportance:
             local_feature_contribution, local_feature_contribution_intercept = \
                 self.calculate_local_feature_contribution(samples, tree, None, None)
         
-        # Get activation patterns
+        # Get activation patterns of samples
         sample_patterns = []
         for sample in samples:
-            sample_tree = tree.build_tree(sample.reshape(1, -1))
-            sample_patterns.append(sample_tree[-1].activation_pattern)
+            leaf_node = self._get_leaf_node(sample, tree)
+            sample_patterns.append(leaf_node.activation_pattern)
+
         sample_patterns = np.array(sample_patterns, dtype=object)
         
+        # Filter: Only reference leaves with samples
+        reference_nodes = self._get_non_empty_leaves(tree.tree)
         reference_patterns = np.array(
-            [list(node.activation_pattern) for node in tree.tree if node.is_leaf],
+            [list(node.activation_pattern) for node in reference_nodes],
             dtype=object
         )
         
@@ -188,7 +212,10 @@ class RENTTFeatureImportance:
             regional_contrib[i] = contrib
             regional_intercept[i] = intercept
         
-        return regional_contrib, regional_intercept
+        return (
+            self._convert_to_serializable(regional_contrib),
+            self._convert_to_serializable(regional_intercept)
+        )
 
     # ==================== Local Methods ====================
     
@@ -202,26 +229,31 @@ class RENTTFeatureImportance:
         intercepts = np.zeros(num_samples)
         
         for i, sample in enumerate(samples):
-            leaf_nodes = [node for node in tree.build_tree(sample.reshape(1, -1)) 
-                          if node.is_leaf]
+            leaf_node = self._get_leaf_node(sample, tree)
             
-            if not leaf_nodes:
-                raise ValueError("No leaf node found for sample")
-            
-            leaf_node = leaf_nodes[-1]
+            if leaf_node.effective_weights is None:
+                raise ValueError(f"No effective weights for sample {i}")
             
             if self.config.dataset.task_type == TaskType.REGRESSION:
                 weights = leaf_node.effective_weights
+                if len(weights) != num_features + 1:
+                    raise ValueError(
+                        f"Weight shape mismatch: expected {num_features + 1}, got {len(weights)}"
+                    )
                 feature_effects[i] = weights[1:]
                 intercepts[i] = weights[0]
             
             elif self.config.dataset.task_type == TaskType.CLASSIFICATION:
                 weights = leaf_node.effective_weights
-                feature_weights = weights[:, 1:]
-                predicted_class = np.argmax(np.dot(feature_weights, sample))
-                feature_effects[i] = feature_weights[predicted_class]
-                intercepts[i] = weights[predicted_class, 0]
-            
+                if weights.ndim == 1:
+                    feature_effects[i] = weights[1:]
+                    intercepts[i] = weights[0]
+                else:
+                    sample_with_bias = np.insert(sample, 0, 1)
+                    predictions = np.dot(weights, sample_with_bias)
+                    predicted_class = np.argmax(predictions)
+                    feature_effects[i] = weights[predicted_class, 1:]
+                    intercepts[i] = weights[predicted_class, 0]
             else:
                 raise ValueError(f"Unsupported task type: {self.config.dataset.task_type}")
         
@@ -242,6 +274,18 @@ class RENTTFeatureImportance:
         return feature_effect * samples, intercept
 
     # ==================== Shared Utilities ====================
+    def _get_leaf_node(self, sample, tree):
+        """Efficiently get leaf node for a sample."""
+        try:
+            return tree._find_leaf_for_sample(sample, tree.tree)
+        except (StopIteration, AttributeError):
+            temp_tree = tree.build_tree(sample.reshape(1, -1))
+            return temp_tree[-1]
+    
+    def _get_non_empty_leaves(self, tree):
+        """Get only leaf nodes with num_samples > 0."""
+        return [node for node in reversed(tree) 
+                if node.is_leaf and node.num_samples > 0]
     
     def _get_weights(self, node, output_idx=None):
         """Extract weights from node."""
@@ -273,13 +317,25 @@ class RENTTFeatureImportance:
                 contributions[mask], intercepts[mask]
             )
         
-        return list(global_contrib), list(global_intercept)
+        return global_contrib, global_intercept
     
     def _aggregate_signed_magnitude(self, values):
         """Aggregate values as: sign(mean) × mean(abs)."""
         mean_val = np.mean(values, axis=0)
         return np.sign(mean_val) * np.mean(np.abs(values), axis=0)
-        
+    
+    def _convert_to_serializable(self, data):
+        """Recursively convert numpy arrays to native Python types."""
+        if isinstance(data, np.ndarray):
+            return data.tolist()
+        elif isinstance(data, (list, tuple)):
+            return [self._convert_to_serializable(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: self._convert_to_serializable(value) for key, value in data.items()}
+        elif isinstance(data, (np.integer, np.floating)):
+            return float(data) if isinstance(data, np.floating) else int(data)
+        else:
+            return data
 
 class DalexFeatureImportance:
     def __init__(self, X_train, y_train, config):
@@ -300,7 +356,7 @@ class DalexFeatureImportance:
             return float(var_str.split("<")[1].split("<=")[0])
         raise ValueError(f"Unexpected format: {var_str}")
 
-    def _extract_explanations(self, explainer, X_test, is_classification, lime_mode):
+    def _extract_explanations(self, explainer, X_test, lime_mode):
         """Common explanation extraction for NN and DT."""
         lime_vals = np.zeros((len(X_test), self.num_features))
         shap_vals = np.zeros((len(X_test), self.num_features))
@@ -337,7 +393,7 @@ class DalexFeatureImportance:
             bd_vals[i] = np.array(data_sorted["contribution"])
 
             # LIME
-            lime_intercept[i] = self._extract_lime_intercept(lime_exp, is_classification)
+            lime_intercept[i] = self._extract_lime_intercept(lime_exp)
             data = lime_exp.result.copy()
             data["sort_value"] = data["variable"].apply(self.extract_value_lime)
             data_sorted = data.sort_values("sort_value")
@@ -345,18 +401,32 @@ class DalexFeatureImportance:
 
         return lime_vals, shap_vals, bd_vals, lime_intercept, shap_intercept, bd_intercept
 
-    def _extract_lime_intercept(self, lime_exp, is_classification):
+    def _extract_lime_intercept(self, lime_exp):
         """Extract LIME intercept handling different frameworks."""
         try:
-            if is_classification:
-                if hasattr(lime_exp.intercept, 'values'):
-                    return next(iter(lime_exp.intercept.values()))
-                return lime_exp.intercept[0] if isinstance(lime_exp.intercept, (list, np.ndarray)) else lime_exp.intercept
-            else:
-                return lime_exp.intercept[0] if isinstance(lime_exp.intercept, (list, np.ndarray)) else lime_exp.intercept
-        except (AttributeError, TypeError, IndexError):
-            return lime_exp.as_list()[0][1] if hasattr(lime_exp, "as_list") else 0
-
+            intercept = lime_exp.intercept
+            
+            if isinstance(intercept, dict):
+                return float(np.mean(list(intercept.values())))
+            
+            if isinstance(intercept, (list, np.ndarray)):
+                return float(intercept[0])
+            
+            if hasattr(intercept, 'values'):
+                return float(next(iter(intercept.values())))
+            
+            if hasattr(intercept, "as_list"):
+                intercept_list = lime_exp.as_list()
+                if intercept_list:
+                    return float(intercept_list[0][1])
+            
+            return float(intercept)
+        
+        except (AttributeError, TypeError, IndexError, ValueError):
+            print("Warning: Unable to extract LIME intercept, defaulting to 0.0")
+            return 0.0
+        
+    
     def calculate_local_feature_importance_nn(self, dnn, X_test):     
         X_subset, y_subset = get_subset(self.X_train, self.y_train, self.config.random_state)
         
@@ -415,7 +485,7 @@ class DalexFeatureImportance:
         
         print('Calculating Dalex on NN')
 
-        return self._extract_explanations(explainer, X_test, is_classification, lime_mode)
+        return self._extract_explanations(explainer, X_test, lime_mode)
     
     def calculate_local_feature_importance_dt(self, tree, X_test):
         """Calculate local feature importance for decision trees."""
@@ -425,8 +495,8 @@ class DalexFeatureImportance:
         label = "Classification" if is_classification else "Regression"
 
         class TreeWrapper:
-            def __init__(self, tree_model, task_type):
-                self.tree_model = tree_model
+            def __init__(self, tree, task_type):
+                self.tree = tree
                 self.task_type = task_type
 
             def predict(self, X):
@@ -435,23 +505,19 @@ class DalexFeatureImportance:
                 if X.ndim == 1:
                     X = X.reshape(1, -1)
 
-                predictions = [
-                    self.tree_model._predict_sample(sample, self.tree_model.build_tree(sample))
-                    for sample in X
-                ]
-                predictions = np.array(predictions)
-
-                if self.task_type == TaskType.REGRESSION:
-                    return predictions.flatten() if predictions.ndim > 1 else predictions
-                return np.argmax(predictions, axis=1) if predictions.ndim > 1 else predictions
+                predictions = self.tree.predict(X, self.tree.tree)
+                if is_classification:
+                    if predictions.ndim > 1:
+                        predictions = predictions[:, 1] if predictions.shape[1] == 2 else predictions.max(axis=1)
+                return predictions
 
         tree_wrapper = TreeWrapper(tree, self.config.dataset.task_type)
 
         with suppress_output():
             explainer = dx.Explainer(tree_wrapper, X_subset, y_subset, label=label)
 
-        print('Calculating DALEX on Decision Tree')
-        return self._extract_explanations(explainer, X_test, is_classification, lime_mode)
+        print('Calculating Dalex on Decision Tree')
+        return self._extract_explanations(explainer, X_test, lime_mode)
 
 
 class SageFeatureImportance:
@@ -460,17 +526,19 @@ class SageFeatureImportance:
         self.y_train = y_train
         self.config = config
 
-    def _calculate_intercept(self, y_subset, sensitivity_intercept, is_classification):
+    def _calculate_intercept(self, X_subset, y_subset, predict_fn):
         """Calculate intercept based on task type."""
-        if is_classification:
-            unique_classes = np.unique(y_subset)
-            class_counts = np.bincount(y_subset.astype(int))[unique_classes]
-            class_probs = class_counts / class_counts.sum()
-            baseline_preds = np.tile(class_probs, (len(y_subset), 1))
-            return log_loss(y_subset, baseline_preds, labels=unique_classes)
+        baseline_preds = predict_fn(X_subset)
+    
+        if self.config.dataset.task_type == TaskType.CLASSIFICATION:
+            # Durchschnittliche Klassenprobabilität als Baseline
+            uniform_probs = np.mean(baseline_preds, axis=0, keepdims=True)
+            uniform_probs = np.tile(uniform_probs, (len(y_subset), 1))
+            return log_loss(y_subset, uniform_probs, labels=np.unique(y_subset))
         else:
-            baseline_preds = np.full_like(y_subset, fill_value=sensitivity_intercept, dtype=np.float64)
-            return mean_squared_error(y_subset, baseline_preds)
+            # Durchschnittliche Vorhersage als Baseline
+            mean_pred = np.mean(baseline_preds)
+            return mean_squared_error(y_subset, np.full_like(y_subset, mean_pred))
 
     @staticmethod
     def _validate_probabilities(probs):
@@ -519,7 +587,7 @@ class SageFeatureImportance:
         sensitivity = estimator(X_test)
         sage_values = estimator(X_test, y_test)
         baseline_pred = np.mean(predict_fn(X_subset))
-        intercept = self._calculate_intercept(y_subset, baseline_pred, is_classification)
+        intercept = self._calculate_intercept(X_subset, y_subset, predict_fn)
 
         return (sensitivity.values, sensitivity.std, baseline_pred,
                 sage_values.values, sage_values.std, intercept)
@@ -537,26 +605,14 @@ class SageFeatureImportance:
             if X.ndim == 1:
                 X = X.reshape(1, -1)
 
-            predictions = np.array([tree._predict_sample(sample, tree.build_tree(sample)) for sample in X])
-            
             if is_classification:
-                # Ensure 1D array
-                predictions = predictions.squeeze()
-                
-                # Clip raw predictions to [0, 1] range (they should be probabilities)
-                predictions = np.clip(predictions, 0, 1)
-                
-                # Build probability matrix [P(class 0), P(class 1)]
-                probs_pos = predictions
-                probs_neg = 1 - probs_pos
-                probs = np.column_stack([probs_neg, probs_pos])
-                
-                # Validate and normalize
+                probs = tree.predict_proba(X, tree.tree)
                 probs = SageFeatureImportance._validate_probabilities(probs)
-                
-                return probs
+                return probs.astype(np.float64)
             else:
-                # For regression, return 1D array
+                predictions = tree.predict(X, tree.tree)
+                if isinstance(predictions, torch.Tensor):
+                    predictions = predictions.cpu().detach().numpy()
                 return predictions.astype(np.float64)
 
         imputer = sage.MarginalImputer(predict_fn, X_subset)
@@ -564,7 +620,7 @@ class SageFeatureImportance:
         sensitivity = estimator(X_test)
         sage_values = estimator(X_test, y_test)
         baseline_pred = np.mean(predict_fn(X_subset))
-        intercept = self._calculate_intercept(y_subset, baseline_pred, is_classification)
+        intercept = self._calculate_intercept(X_subset, y_subset, predict_fn)
 
         return (sensitivity.values, sensitivity.std, baseline_pred,
                 sage_values.values, sage_values.std, intercept)

@@ -55,7 +55,7 @@ class DataScaler:
             MinMaxScaler() if self.scaler_type == ScalerType.MINMAX
             else StandardScaler() if self.scaler_type == ScalerType.STANDARD else None
         )
-        return scaler.fit_transform(X)
+        return scaler.fit_transform(X) if scaler else X
 
 
 # =============================================================================

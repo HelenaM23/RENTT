@@ -552,6 +552,10 @@ def main(cfg: DictConfig):
 
         print("Configuration:")
         print(f" Dataset: {config.dataset.name}")
+        print(f" Using Framework: {config.framework.name}")
+        print(f" Task Type: {config.dataset.task_type.name}")
+        print(f" Using Complete Tree: {config.use_complete_tree}")
+        print(f" Number of Samples for FI Computation: {config.num_samples}")
 
         directories = create_directories(config.dataset.name)
 
@@ -587,7 +591,7 @@ def main(cfg: DictConfig):
 
         calculate_global_sota_methods(config, nn, tree, directories, X_train, y_train, X_total, y_total, results, flags)
 
-        if any(flags.values()):
+        if config.compute_global_fe or config.compute_global_fe or flags["global_sota_nn"] or flags["global_sota_dt"]:
             save_results_to_csv(results["global"], filenames["global"])
 
         calculate_local_sota_methods(config, nn, tree, X_train, y_train, X_total, results, flags)

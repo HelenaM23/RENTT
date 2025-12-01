@@ -59,6 +59,21 @@ class BaseTree:
         self.framework = framework
 
     # ============================================================================
+    # DATA PREPROCESSING
+    # ============================================================================
+    
+    def _preprocess_data(self, data):
+        # Insert 1 for bias pass-through
+        if data.ndim == 1:
+            data = np.insert(data, 0, 1)
+        elif data.ndim > 2:
+            data = [sample.flatten() for sample in data]
+            data = np.insert(data, 0, 1, axis=1)
+        else: 
+            data = np.insert(data, 0, 1, axis=1)
+        return data
+
+    # ============================================================================
     # NODE CREATION
     # ============================================================================
 
@@ -102,6 +117,19 @@ class BaseTree:
             if node.node_id == node_id:
                 return node
         return None
+    
+    def _find_leaf_for_sample(self, sample, tree):
+        """Navigate tree to find leaf node for a given sample."""
+            
+        current_node = tree[0]
+        sample_with_bias = np.insert(sample, 0, 1)
+        
+        while not current_node.is_leaf:
+            weighted_sum = np.dot(sample_with_bias, current_node.effective_weights)
+            next_id = current_node.node_id * 2 + (1 if weighted_sum >= 0 else 2)
+            current_node = next(node for node in tree if node.node_id == next_id)
+        
+        return current_node
     
     # ============================================================================
     # WEIGHT MATRIX OPERATIONS
@@ -185,11 +213,83 @@ class BaseTree:
         return int(decisions)
     
     # ============================================================================
+    # PREDICTION
+    # ============================================================================
+
+    def _predict_sample(self, sample, leaf_node):
+        sample = np.insert(sample, 0, 1)
+        if self.task_type == TaskType.REGRESSION:
+            return (
+                np.dot(sample, leaf_node.effective_weights)
+            )
+        else:
+            output = []
+            for class_weights in leaf_node.effective_weights:
+                class_output = np.dot(sample, class_weights) 
+                output.append(class_output)
+            return np.array(output)
+        
+
+    def predict(self, data, tree):
+        predictions = []
+        for sample in data:
+            sample = np.array([[sample]]) if np.isscalar(sample) else sample
+            sample = sample.flatten() if sample.ndim > 1 else sample
+            try:
+                leaf_node = self._find_leaf_for_sample(sample, tree)
+            except StopIteration:
+                tree = self.build_tree(sample)
+                leaf_node = tree[-1]
+
+            prediction = self._predict_sample(sample, leaf_node)
+            predictions.append(prediction)
+
+        predictions = np.array(predictions)
+        if self.task_type == TaskType.REGRESSION:
+            return predictions
+        elif self.task_type == TaskType.CLASSIFICATION:
+            return np.argmax(predictions, axis=1)
+        else:
+            raise ValueError("Invalid task_type value")
+        
+    def predict_proba(self, data, tree):
+        """Return raw prediction scores (before argmax) for classification."""
+        predictions = []
+        for sample in data:
+            sample = np.array([[sample]]) if np.isscalar(sample) else sample
+            sample = sample.flatten() if sample.ndim > 1 else sample
+            try:
+                leaf_node = self._find_leaf_for_sample(sample, tree)
+            except StopIteration:
+                tree = self.build_tree(sample)
+                leaf_node = tree[-1]
+
+            prediction = self._predict_sample(sample, leaf_node)
+            predictions.append(prediction)
+
+        predictions = np.array(predictions)
+        
+        if self.task_type == TaskType.CLASSIFICATION:
+            if predictions.shape[1] > 1:
+                predictions = self._softmax(predictions)
+            else:
+                predictions = 1 / (1 + np.exp(-predictions))
+        if predictions.ndim > 1 and predictions.shape[1] == 1:
+            predictions = predictions.flatten()
+        return predictions
+    
+    @staticmethod
+    def _softmax(x):
+        """Apply softmax to convert raw scores to probabilities."""
+        e_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return e_x / e_x.sum(axis=1, keepdims=True)
+    
+    # ============================================================================
     # EVALUATION
     # ============================================================================
 
-    def evaluate(self, X_test, y_test):
-        tree_predictions = self.predict(X_test)
+    def evaluate(self, X_test, y_test, tree):
+        tree_predictions = self.predict(X_test, tree)
         num_samples_test = X_test.shape[0]
 
         if self.task_type == TaskType.REGRESSION:
@@ -223,20 +323,7 @@ class Tree(BaseTree):
     """
     
 
-    # ============================================================================
-    # DATA PREPROCESSING
-    # ============================================================================
-    
-    def _preprocess_data(self, data):
-        # Insert 1 for bias pass-through
-        if data.ndim == 1:
-            data = np.insert(data, 0, 1)
-        elif data.ndim > 2:
-            data = [sample.flatten() for sample in data]
-            data = np.insert(data, 0, 1, axis=1)
-        else: 
-            data = np.insert(data, 0, 1, axis=1)
-        return data
+
 
     # ============================================================================
     # TREE BUILDING
@@ -349,40 +436,6 @@ class Tree(BaseTree):
                 if node.num_samples > 0:
                     tree.append(node)
 
-    # ============================================================================
-    # PREDICTION
-    # ============================================================================
-
-    def _predict_sample(self, sample, tree):
-        leaf_node = tree[-1]
-        sample = np.insert(sample, 0, 1)
-        if self.task_type == TaskType.REGRESSION:
-            return (
-                np.dot(sample, leaf_node.effective_weights)
-            )
-        else:
-            output = []
-            for class_weights in leaf_node.effective_weights:
-                class_output = np.dot(sample, class_weights) 
-                output.append(class_output)
-            return np.array(output)
-
-    def predict(self, data, tree=None):
-        predictions = []
-        for sample in data:
-            sample = np.array([[sample]]) if np.isscalar(sample) else sample
-            sample = sample.flatten() if sample.ndim > 1 else sample
-            tree = self.build_tree(sample)
-            prediction = self._predict_sample(sample, tree)
-            predictions.append(prediction)
-
-        predictions = np.array(predictions)
-        if self.task_type == TaskType.REGRESSION:
-            return predictions
-        elif self.task_type == TaskType.CLASSIFICATION:
-            return np.argmax(predictions, axis=1)
-        else:
-            raise ValueError("Invalid task_type value")
 
 class CompleteTree(BaseTree):
     """
@@ -485,7 +538,6 @@ class CompleteTree(BaseTree):
 
         # Create leaf nodes
         self._create_leaf_nodes(tree, current_parents, decisions_per_layer)
-        self.tree = tree
         return tree
 
     def _create_leaf_nodes(self, tree, current_parents, decisions_per_layer):
@@ -521,73 +573,4 @@ class CompleteTree(BaseTree):
 
                 tree.append(node)
 
-    # ============================================================================
-    # DATA PREPROCESSING
-    # ============================================================================
-    
-    def _preprocess_data(self, data):
-        """Preprocess data by adding bias term."""
-        # Insert 1 for bias pass-through
-        if data.ndim == 1:
-            data = np.insert(data, 0, 1)
-        elif data.ndim > 2:
-            data = [sample.flatten() for sample in data]
-            data = np.insert(data, 0, 1, axis=1)
-        else: 
-            data = np.insert(data, 0, 1, axis=1)
-        return data
 
-    # ============================================================================
-    # PREDICTION
-    # ============================================================================
-
-    def _predict_sample(self, sample, tree=None):
-        """Predict for a single sample using the complete tree."""
-        if self.tree is None:
-            raise ValueError("Tree not built. Call build_tree() first.")
-
-        # Navigate tree based on weighted sums
-        current_node = self.tree[0]
-        sample_with_bias = np.insert(sample, 0, 1)
-
-        while not current_node.is_leaf:
-            weighted_sum = np.dot(
-                sample_with_bias, 
-                current_node.effective_weights
-            )
-            next_id = current_node.node_id * 2 + (1 if weighted_sum >= 0 else 2)
-            current_node = next(
-                node for node in self.tree if node.node_id == next_id
-            )
-
-        # Calculate output at leaf node
-        if self.task_type == TaskType.REGRESSION:
-            return np.dot(sample_with_bias, current_node.effective_weights)
-        else:  # Classification
-            output = []
-            for class_weights in current_node.effective_weights:
-                class_output = np.dot(sample_with_bias, class_weights)
-                output.append(class_output)
-            return np.array(output)
-
-    def predict(self, data):
-        """Predict for multiple samples."""
-        if not isinstance(data, np.ndarray):
-            data = np.array(data)
-        if len(data.shape) == 1:
-            data = data.reshape(1, -1)
-
-        predictions = []
-        for sample in data:
-            sample = sample.flatten() if sample.ndim > 1 else sample
-            prediction = self._predict_sample(sample)
-            predictions.append(prediction)
-
-        predictions = np.array(predictions)
-        
-        if self.task_type == TaskType.REGRESSION:
-            return predictions
-        elif self.task_type == TaskType.CLASSIFICATION:
-            return np.argmax(predictions, axis=1)
-        else:
-            raise ValueError("Invalid task_type value")

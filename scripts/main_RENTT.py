@@ -138,7 +138,7 @@ def build_and_evaluate_decision_tree(tree: Union[Tree, CompleteTree], X_total: n
     print(f" Decision Tree Building Time: {elapsed_time:.2f} seconds")
 
     print("Evaluating Decision Tree...")
-    accuracy = tree.evaluate(X_test, y_test)
+    accuracy = tree.evaluate(X_test, y_test, tree_model)
     num_layers = tree_model[-1].col
     num_nodes = len(tree_model)
 
@@ -206,6 +206,7 @@ def main(cfg: DictConfig):
         tree_model, tree_accuracy, num_layers, num_nodes = build_and_evaluate_decision_tree(
             tree, X_total, X_test, y_test, config
         )
+
         if config.load_nn_model == False:
             if config.use_complete_tree:
                 output_file_decision_tree = str(directories["models"]) + "/CompleteTree_" + config.dataset.model_filename + ".pkl"

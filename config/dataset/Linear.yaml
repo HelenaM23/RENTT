@@ -3,7 +3,7 @@ task_type: regression
 num_features: 3
 num_output: 1
 model_filename: 8-4_20250707-1153
-scalar_type: minmax
+scalar_type: null
 feature_names:
   - x1
   - x2
